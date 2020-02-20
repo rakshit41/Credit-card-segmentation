@@ -1,0 +1,437 @@
+---
+title: "cc_segmentation"
+author: "Rakshit R K"
+date: "29/12/2019"
+---
+
+rm(list=ls())
+setwd("C:/Users/rakshith/Desktop/DataSets/Edwisor/CC segmentation R")
+# loading the libraries
+x = c("ggplot2", "corrgram", "DMwR", "cluster", "unbalanced", "dummies", "e1071","ggbiplot"
+      ,"MASS", "NbClust", "gbm", "tidyverse", 'reshape', 'DataCombine', 'factoextra')
+#install.packages(x)
+lapply(x, require, character.only = TRUE)
+rm(x)
+# Loading the data set
+cr_data=read.csv('credit-card-data.csv', header = T)
+summary(cr_data)
+str(cr_data)
+# The data contains 18 variables, with all being either numeric or integer type, except for customer id.
+# The data contains 8950 observations
+# There are missing values in MINIMUM_PAYMENTS and CREDIT_LIMIT
+# And there is indiation of presence of outliers
+
+### MISSING VALUE ANALYSIS ###
+missing_df=data.frame(apply(cr_data,2,function(x){sum(is.na(x))}))
+names(missing_df)='Missing_count'
+missing_df$variables=row.names(missing_df)
+row.names(missing_df)=NULL
+missing_df=missing_df[,c(2,1)]
+
+# MINIMUM_PAYMENTS has 313 missing values and CREDIT LIMIT has one missing value
+
+ggplot(missing_df,aes(x=variables,y=Missing_count))+
+  geom_bar(stat='identity',fill='grey')+xlab('feature name')+ylab('missing count')+ggtitle('missing valu analysis')+theme_bw()
+
+# Checking for the best value to impute
+mean(cr_data$MINIMUM_PAYMENTS,na.rm = T) # 864.2065
+median(cr_data$MINIMUM_PAYMENTS,na.rm = T) # 312.34
+cr_data_copy=cr_data
+# Trial and error with KNN values at diffrent ranges of MINIMUM PAYMENTS
+cr_data_copy$MINIMUM_PAYMENTS[2]=NA 
+cr_data_copy=knnImputation(cr_data_copy,k=3)
+
+cr_data_copy$MINIMUM_PAYMENTS[5]=NA
+cr_data_copy=knnImputation(cr_data_copy,k=3)
+
+cr_data_copy$MINIMUM_PAYMENTS[6]=NA
+cr_data_copy=knnImputation(cr_data_copy,k=3)
+
+cr_data_copy$MINIMUM_PAYMENTS[24]=NA
+cr_data_copy=knnImputation(cr_data_copy,k=3)
+
+rm(cr_data_copy)
+
+# KNN is getting closer values to the actual values at diffrent ranges, hence will impute missing data with KNN values
+cr_data=knnImputation(cr_data,k=3)
+sum(is.na(cr_data))
+
+### OUTLIER ANALYSIS ###
+boxplot(cr_data[,-1])
+cnames=colnames(cr_data[,-c(1)])
+for (i in 1:length(cnames)){
+   
+     assign(paste0("CC",i), ggplot(aes_string(y = (cnames[i]), x = "TENURE"), data = subset(cr_data))+ 
+              stat_boxplot(geom = "errorbar", width = 0.5) +
+              geom_boxplot(outlier.colour="red", fill = "grey" ,outlier.shape=18,
+                           outlier.size=1, notch=FALSE) +
+              theme(legend.position="bottom")+
+              labs(y=cnames[i],x="TENURE")+
+              ggtitle("BOXPLOT VISUALIZATIONS"))
+  
+}
+gridExtra::grid.arrange(CC1,CC2,CC3,CC4,CC5,CC6,CC7,CC8)
+gridExtra::grid.arrange(CC9,CC10,CC11,CC12,CC13,CC14,CC15,CC16,CC17)
+
+# Will Replace outliers with the Highest and Lowest values respectively
+fun=function(x){
+  quantiles=quantile(x, c(.25, .75 ))
+  iqr=quantiles[2]-quantiles[1]
+  minimum=quantiles[1]-(iqr*3)
+  maximum=quantiles[2]+(iqr*3)
+  x[ x < minimum ]=minimum
+  x[ x > maximum ]=maximum
+  x
+}
+# Replacing outliers using above function, and deleting CUST_ID from the data set, keeping TENURE as it is
+TENURE=cr_data$TENURE
+cr_data=as.data.frame(apply(cr_data[,-c(1,18)],2,fun))
+cr_data=cbind(cr_data,TENURE)
+str(cr_data)
+summary(cr_data)
+
+### DERIVING KEY PERFORMANCE INDICATORS (KPI's) ###
+## The Following new features are to be derived
+# Monthly Average Purchases
+# Advance Cash Amount
+# Usage Limit
+# Minimum Payment Ratio
+# Type of Purchase Being Made
+
+cr_data$month_avg_purchase=cr_data$PURCHASES/cr_data$TENURE
+cr_data$month_cash_advance=cr_data$CASH_ADVANCE/cr_data$TENURE
+cr_data$usage_limit=cr_data$BALANCE/cr_data$CREDIT_LIMIT
+cr_data$min_payment_ratio=cr_data$PAYMENTS/cr_data$MINIMUM_PAYMENTS
+
+summary(cr_data)
+# Checking type of purchases being made
+head(cr_data[,c(4,5)]) 
+# From above data it is clear that there are people making both purchases,none of the purchases and either of purchase type
+cr_data$none_of_purchases=ifelse(cr_data$ONEOFF_PURCHASES==0 & cr_data$INSTALLMENTS_PURCHASES==0,1,0)
+cr_data$both_of_purchases=ifelse(cr_data$ONEOFF_PURCHASES!=0 & cr_data$INSTALLMENTS_PURCHASES!=0,1,0)
+cr_data$oneoff_only=ifelse(cr_data$ONEOFF_PURCHASES!=0 & cr_data$INSTALLMENTS_PURCHASES==0,1,0)
+cr_data$installment_only=ifelse(cr_data$ONEOFF_PURCHASES==0 & cr_data$INSTALLMENTS_PURCHASES!=0,1,0)
+
+print(paste("Count of CC-holders making installment purchases only is",nrow(cr_data[which(cr_data$installment_only==1),]))) #2260
+print(paste("Count of CC-holders one-off purchases only is",nrow(cr_data[which(cr_data$oneoff_only==1),])))          #1874
+print(paste("Count of CC-holders making both type of purchases is",nrow(cr_data[which(cr_data$both_of_purchases==1),])))    #2774
+print(paste("Count of CC-holders making None type of purchases is",nrow(cr_data[which(cr_data$none_of_purchases==1),])))    #2042
+
+## Checking the distribution of data and Scaling the features
+cr_mean_values=as.data.frame(apply(cr_data,2,mean))
+names(cr_mean_values)="Mean_of_features"
+cr_mean_values$feature=row.names(cr_mean_values)
+row.names(cr_mean_values)=NULL
+cr_mean_values=cr_mean_values[,c(2,1)]
+
+# Distribution plots
+qqnorm(cr_mean_values$Mean_of_features,main = 'Normality plot',xlab = 'Mean of Features',ylab='Frequency',col='red');qqline(cr_mean_values$Mean_of_features)
+hist(cr_mean_values$Mean_of_features,main = 'Distribution of means of features',xlab = 'mean of fetures',
+     ylab = 'Frequency',col = 'Blue')
+barplot(cr_mean_values$Mean_of_features,main = 'Bar plot of features',xlab = 'Mean of features',
+        ylab = 'Frequency',col = 'darkmagenta')
+
+# The data is non-uniformly distributed as indicated by histogram and normality plots
+# The range of data is very large as indicated by barplot
+
+## Using normality to scale the data ##
+for(i in colnames(cr_data)){
+  print(i)
+  cr_data[,i] = (cr_data[,i] - min(cr_data[,i]))/
+    (max(cr_data[,i] - min(cr_data[,i])))
+}
+
+write.csv(cr_data,"cr_clean_data.csv",row.names = FALSE)
+#cr_data=read.csv('cr_clean_data.csv',header = T)
+
+### VISUALIZATION WITH KPI's ###
+installment_indices=which(cr_data$installment_only==1)
+oneoff_indices=which(cr_data$oneoff_only==1)
+both_indices=which(cr_data$both_of_purchases==1)
+none_indices=which(cr_data$none_of_purchases==1)
+
+min_pay_df=data.frame(purchase_type=c('NONE OF PURCHASE','BOTH OF PURCHASE','ONEOFF','INSTALLMENT'),
+                      min_payment_ratio=c(sum(cr_data$min_payment_ratio[none_indices]),sum(cr_data$min_payment_ratio[both_indices]),
+                                          sum(cr_data$min_payment_ratio[oneoff_indices]),sum(cr_data$min_payment_ratio[installment_indices])))
+
+usage_limit_df=data.frame(purchase_type=c('NONE OF PURCHASE','BOTH OF PURCHASE','ONEOFF','INSTALLMENT'),
+                      usage_limit=c(sum(cr_data$usage_limit[none_indices]),sum(cr_data$usage_limit[both_indices]),
+                                    sum(cr_data$usage_limit[oneoff_indices]),sum(cr_data$usage_limit[installment_indices])))
+
+month_cash_advance_df=data.frame(purchase_type=c('NONE OF PURCHASE','BOTH OF PURCHASE','ONEOFF','INSTALLMENT'),
+                      month_cash_advance=c(sum(cr_data$month_cash_advance[none_indices]),sum(cr_data$month_cash_advance[both_indices]),
+                                          sum(cr_data$month_cash_advance[oneoff_indices]),sum(cr_data$month_cash_advance[installment_indices])))
+
+month_avg_purchase_df=data.frame(purchase_type=c('NONE OF PURCHASE','BOTH OF PURCHASE','ONEOFF','INSTALLMENT'),
+                      monthly_avg_purchase=c(sum(cr_data$month_avg_purchase[none_indices]),sum(cr_data$month_avg_purchase[both_indices]),
+                                          sum(cr_data$month_avg_purchase[oneoff_indices]),sum(cr_data$month_avg_purchase[installment_indices])))
+
+balance_df=data.frame(purchase_type=c('NONE OF PURCHASE','BOTH OF PURCHASE','ONEOFF','INSTALLMENT'),
+                      BALANCE=c(sum(cr_data$BALANCE[none_indices]),sum(cr_data$BALANCE[both_indices]),
+                                          sum(cr_data$BALANCE[oneoff_indices]),sum(cr_data$BALANCE[installment_indices])))
+
+kpi_plot=function(df){
+  ggplot(df,aes(x=df$purchase_type,y=df[,2]))+geom_bar(stat = 'identity',col='black',fill='dodgerblue')+xlab('PURCHASE TYPE')+
+    ylab(colnames(df[2]))+theme_grey()
+}
+kpi_plot(min_pay_df)
+kpi_plot(usage_limit_df)
+kpi_plot(month_avg_purchase_df)
+kpi_plot(month_cash_advance_df)
+kpi_plot(balance_df)
+
+
+### CORRELATION ANALYSIS ###
+corrgram(cr_data,upper.panel=panel.pie,text.panel = panel.txt, main = "Correlation Plot")
+# As seen from the correlation plot, most of the features are correlated with each other
+# Dropping few of the variables that are used to derive new features
+cr_data=subset(cr_data,select=-c(BALANCE,PURCHASES,CASH_ADVANCE,TENURE,PAYMENTS,MINIMUM_PAYMENTS,CREDIT_LIMIT))
+corrgram(cr_data,upper.panel=panel.pie,text.panel = panel.txt, main = "Correlation Plot")
+
+####  PRINCIPAL COMPONENT ANALYSIS  ####
+cr_pca=prcomp(cr_data)
+cr_pca
+names(cr_pca)
+summary(cr_pca)
+cr_pca$center
+dim(cr_pca$x)
+## The conclusions regarding the principal components(PC)
+# % Of Propotion of  variance explained by PC1 = 36.09%
+# % Of Propotion of  variance explained by PC2 = 19.59%
+# % Of Propotion of  variance explained by PC3 = 14.1%
+# % Of Propotion of  variance explained by PC4 = 8.1%
+# % Of Propotion of  variance explained by PC5 = 5.7%
+# % Of Propotion of  variance explained by PC6 = 5.0%
+# % Of Propotion of  variance explained by PC7 = 3.72%
+# % Of Propotion of  variance explained by PC8 = 2.63%
+# % Of Propotion of  variance explained by PC9 = 1.963%
+# % Of Propotion of  variance explained by PC10 = 1.0%
+
+## When we take cumulative propotion of variance explained we see that 
+# PC of 5 are explaining 83.68% of variance
+# PC of 6 are explaining 88.759% of variance
+# PC of 7 are expaining 92.48% of variance
+# PC of 8 are expaining 95.11 of variance
+# PC of 9 are expaining 97.07% of variance
+# PC of 10 are expaining 98.11% of variance
+
+## OPTIMUM NUMBER OF PC's TO BE CONSIDERED WOULD BE CONCLUDED FROM THE PLOTS
+# SCREE PLOT
+prop_variance=cr_pca$sdev**2/sum(cr_pca$sdev**2)
+plot(prop_variance, xlab = "Principal Component",
+          ylab = "Proportion of Variance Explained",
+          type = "b")
+
+## CUMULATIVE variance SCREE plot
+plot(cumsum(prop_variance), xlab = "Principal Component",
+     ylab = "Cumulative Proportion of Variance Explained",
+     type = "b")
+
+# From both of the above SCREE plots we can conclude that PC of 5,6,7 would be the optimimum number of PRINCIPAL COMPONENTS
+
+#### PCA WITH 5 PRINCIPAL COMPONENTS  #####
+cr_pca5=cr_pca$x[,1:5]
+## Using KMeans to find out the optimimum number of clusters
+
+## Plot of within sum of squares / ELBOW METHOD
+fviz_nbclust(cr_pca5,kmeans,method='wss')
+# Extracting with in sum of squares
+wss =function(k) {
+  within_ss=kmeans(cr_pca5, k, nstart = 10 )$tot.withinss
+}
+k_values=1:15
+wss_values= map_dbl(k_values, wss)
+
+wss_df=data.frame(number_of_clusters=k_values,wss=wss_values)
+
+## plot of silhouette score
+fviz_nbclust(cr_pca5, kmeans, method = "silhouette")
+
+# Extracting Silhouette score
+avg_sil=function(k) {
+  km_res = kmeans(cr_pca5, centers = k, nstart = 25)
+  ss=silhouette(km_res$cluster, dist(cr_pca5))
+  mean(ss[, 3])
+}
+k_values=2:15
+avg_sil_values=map_dbl(k_values, avg_sil)
+sil_df=data.frame(number_of_clusters=k_values,wss=avg_sil_values)
+
+## Creating clusters with 4
+pca5_clus=kmeans(cr_pca5,4)
+pca5_clus # (between_SS / total_SS =  73.2 %)
+fviz_cluster(pca5_clus, data = cr_pca5)
+# 4 clusters are disinguishable
+
+## Creating clusters with 5
+pca5_clus=kmeans(cr_pca5,5)
+pca5_clus  # (between_SS / total_SS =  76.0 %)
+fviz_cluster(pca5_clus, data = cr_pca5)
+# we can clearly distimguish 4 clusters but 5th cluster is overlapping
+
+
+#### PCA with 6 principal components  #####
+cr_pca6=cr_pca$x[,1:6]
+# Plot of within sum of squares / ELBOW METHOD
+fviz_nbclust(cr_pca6,kmeans,method='wss')
+
+# Extracting with in sum of squares
+wss =function(k) {
+  within_ss=kmeans(cr_pca6, k, nstart = 10 )$tot.withinss
+}
+k_values=1:15
+wss_values= map_dbl(k_values, wss)
+
+wss6_df=data.frame(number_of_clusters=k_values,wss=wss_values)
+
+## plot of silhouette score
+fviz_nbclust(cr_pca6, kmeans, method = "silhouette")
+
+# Extracting Silhouette score
+avg_sil=function(k) {
+  km_res = kmeans(cr_pca6, centers = k, nstart = 25)
+  ss=silhouette(km_res$cluster, dist(cr_pca6))
+  mean(ss[, 3])
+}
+k_values=2:15
+avg_sil_values=map_dbl(k_values, avg_sil)
+sil6_df=data.frame(number_of_clusters=k_values,wss=avg_sil_values)
+
+## Creating clusters with 4
+pca6_clus=kmeans(cr_pca6,4)
+pca6_clus # (between_SS / total_SS =  69.2 %)
+fviz_cluster(pca6_clus, data = cr_pca6)
+# Overlapping of clusters is seen
+
+## Creating clusters with 5
+pca6_clus=kmeans(cr_pca6,5)
+pca6_clus # (between_SS / total_SS =  73.1 %)
+fviz_cluster(pca6_clus, data = cr_pca6)
+
+
+#### PCA with 7 principal components  #####
+cr_pca7=cr_pca$x[,1:7]
+# Plot of within sum of squares / ELBOW METHOD
+fviz_nbclust(cr_pca7,kmeans,method='wss')
+
+# Extracting with in sum of squares
+wss =function(k) {
+  within_ss=kmeans(cr_pca7, k, nstart = 10 )$tot.withinss
+}
+k_values=1:15
+wss_values= map_dbl(k_values, wss)
+
+wss7_df=data.frame(number_of_clusters=k_values,wss=wss_values)
+
+## plot of silhouette score
+fviz_nbclust(cr_pca7, kmeans, method = "silhouette")
+
+# Extracting Silhouette score
+avg_sil=function(k) {
+  km_res = kmeans(cr_pca7, centers = k, nstart = 25)
+  ss=silhouette(km_res$cluster, dist(cr_pca7))
+  mean(ss[, 3])
+}
+k_values=2:15
+avg_sil_values=map_dbl(k_values, avg_sil)
+sil7_df=data.frame(number_of_clusters=k_values,wss=avg_sil_values)
+
+## Creating clusters with 5
+pca7_clus=kmeans(cr_pca7,5)
+pca7_clus # (between_SS / total_SS =  68.1 %)
+fviz_cluster(pca7_clus, data = cr_pca7)
+# Overlapping of clusters is seen
+
+## Creating clusters with 6
+pca7_clus=kmeans(cr_pca7,6)
+pca7_clus # (between_SS / total_SS =  73.4 %)
+fviz_cluster(pca7_clus, data = cr_pca7)
+
+######### CHOOSING THE BEST MODEL  ######
+## Based on cluster plots and the Data frames of elbow/wss  and silhoutte width following conlusions are made
+# 4 clusters are distinguishing features amongst each other with 5 Principal components
+# silhouette score is max at 4 clusters with 5 Priincipal components i.e 0.5433092
+# Within sum of squuares (WSS) is least in case of 4 clusters with 5 principal components i.e 3638.451
+
+## HENCE 4 CLUSTERS WOULD BE FORMED WITH 5 PRINCIPAL COMPONENTS FOR SEGMENTATION OF DATA ##
+
+#############  FINAL CLUSTERING MODEL  ###########
+set.seed(1234)
+final_cluster_model=kmeans(cr_pca5,4,nstart = 25)
+fviz_cluster(final_cluster_model, data = cr_pca5)
+
+# loading the original data set
+cr_final_data=read.csv('cr_clean_data.csv',header = T)
+cr_final_data$cluster_group=final_cluster_model$cluster
+
+#write.csv(cr_final_data,"cr_cluster_data.csv",row.names = F)
+#cr_final_data=read.csv("cr_cluster_data.csv",header = T)
+
+
+## ANALYSING THE CLUSTERS ##
+
+cl1_indices=which(cr_final_data$cluster_group==1)
+cl2_indices=which(cr_final_data$cluster_group==2)
+cl3_indices=which(cr_final_data$cluster_group==3)
+cl4_indices=which(cr_final_data$cluster_group==4)
+
+plot_df=data.frame(cluster_1=c(mean(cr_final_data$BALANCE[cl1_indices]),mean(cr_final_data$ONEOFF_PURCHASES[cl1_indices]),
+                               mean(cr_final_data$INSTALLMENTS_PURCHASES[cl1_indices]),mean(cr_final_data$month_avg_purchase[cl1_indices]),mean(cr_final_data$month_cash_advance[cl1_indices]),
+                               mean(cr_final_data$usage_limit[cl1_indices]),mean(cr_final_data$min_payment_ratio[cl1_indices])),
+                   cluster_2=c(mean(cr_final_data$BALANCE[cl2_indices]),mean(cr_final_data$ONEOFF_PURCHASES[cl2_indices]),
+                               mean(cr_final_data$INSTALLMENTS_PURCHASES[cl2_indices]),mean(cr_final_data$month_avg_purchase[cl2_indices]),mean(cr_final_data$month_cash_advance[cl2_indices]),
+                               mean(cr_final_data$usage_limit[cl2_indices]),mean(cr_final_data$min_payment_ratio[cl2_indices])),
+                   cluster_3=c(mean(cr_final_data$BALANCE[cl3_indices]),mean(cr_final_data$ONEOFF_PURCHASES[cl3_indices]),
+                               mean(cr_final_data$INSTALLMENTS_PURCHASES[cl3_indices]),mean(cr_final_data$month_avg_purchase[cl3_indices]),mean(cr_final_data$month_cash_advance[cl3_indices]),
+                               mean(cr_final_data$usage_limit[cl3_indices]),mean(cr_final_data$min_payment_ratio[cl3_indices])),
+                   cluster_4=c(mean(cr_final_data$BALANCE[cl4_indices]),mean(cr_final_data$ONEOFF_PURCHASES[cl4_indices]),
+                               mean(cr_final_data$INSTALLMENTS_PURCHASES[cl4_indices]),mean(cr_final_data$month_avg_purchase[cl4_indices]),mean(cr_final_data$month_cash_advance[cl4_indices]),
+                               mean(cr_final_data$usage_limit[cl4_indices]),mean(cr_final_data$min_payment_ratio[cl4_indices])))
+row.names(plot_df)=c('BALANCE','ONEOFF_PURCHASES','INSTALLMENT_PURCHASES','MONTH_AVG_PURCHASE','MONTH_CASH_ADVANCE','USAGE_LIMIT','MIN_PAYMENT_RATIO')
+
+## Plotting clusters against various influencing factors
+plot_df$id = 1:nrow(plot_df)
+dat = melt(plot_df,id.vars = "id")
+ggplot(dat,aes(x=factor(id), y = value)) + 
+  facet_wrap(~variable) +
+  geom_bar(stat='identity',aes(fill = factor(id)))
+# In the above plot 
+#factor(id=1,2,3,4,5,6,7)=BALANCE,ONEOFF_PURCHASES,INSTALLMENT_PURCHASES,MONTH_AVG_PURCHASE,MONTH_CASH_ADVANCE,USAGE_LIMIT,MIN_PAYMENT_RATIO
+
+##### CONCLUSIONS REGARDING THE CLUSTERS #########
+### CLUSTER 1 ###
+# This group of customers pocess highest balance
+# They are not making any kind of purchases i.e oneoff or installment
+# They are taking high amount of cash in advance
+# They are having the poor credit scores, i.e usage limit is high amongst in this group
+# Minimum payment ratio is high indicating they are paying very less amount
+# Overall this group of customers are performing poor, and are not helping in  boosting the business, and so appropriate measures have to be taken.
+
+### CLUSTER 2 ###
+# They are making both type of purchases i.e oneoff and installment type
+# They have the second highest balance amongst all
+# They are having the highest monthly average purchases
+# They are taking less cash in advance
+# They are having second best credit score among all
+# They have a very good payment ratio
+# Overall this group is performing well and meeting the business requirements,hence these CC holders are considered to be important customers.
+
+### CLUSTER 3 ###
+# They are making only one-off purchases and not installment type
+# They second least balance amongst the cluster groups
+# Monthly average purchase is second best.
+# They are second best in taking cash in advance amongst cluster groups
+# They have a good credit score, but has to improve.
+# They are maintaining good payment ratio
+
+### CLUSTER 4 ###
+# They are making only Installment type purchases and not one-off type
+# They are maintaining the low balance compared to rest of the groups
+# Monthly average purchase is less
+# They are taking least cash in advance compared to other cluster groups
+# They have a good credit score as well
+# They are making payment in less amount
+
+
+
+############################################# END #############################################
